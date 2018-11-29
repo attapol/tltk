@@ -1,2 +1,0 @@
-# tltk
-Thai Language Toolkit
