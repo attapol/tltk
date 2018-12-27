@@ -1,4 +1,4 @@
-Thai Language Toolkit Project  version 1.1.7
+Thai Language Toolkit Project  version 1.2.1
 ============================================
 
 TLTK is a Python package for Thai language processing: syllable, word, discouse unit segmentation, pos tagging, named entity recognition, grapheme2phoneme, ipa transcription, romanization, etc.  TLTK requires Python 3.4 or higher.

@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 #########################################################
-## Thai Language Toolkit : version  1.1.7
+## Thai Language Toolkit : version  1.2.1
 ## Chulalongkorn University
 ## word_segmentation, syl_segementation written by Wirote Aroonmanakun
 ## Implemented :
@@ -566,11 +566,13 @@ def sylparse(Input):
                     if k not in schart[0]:                        
                         schartx[0][k] = tmp
                         probEnd[(0,k)] = prob_trisyl(tmp)
+#                        print("Not Found K",tmp,probEnd[(0,k)])
                     else:
                         p = prob_trisyl(tmp)
                         if p > probEnd[(0,k)]:
                             schartx[0][k] = tmp 
                             probEnd[(0,k)] = p
+#                            print("Found K new",tmp,probEnd[(0,k)])
         schart = deepcopy(schartx)
     if EndOfInput in schart[0]:    
         return(SylSep.join(schart[0][EndOfInput]))
@@ -914,6 +916,7 @@ def SelectPhones(slst):
    i = 1
    for i in range(1,len(slst)-1):
         outp = ''
+        prmax = 0.
 #        if slst[i] == '|': continue
         if len(PRONUN[slst[i]]) == 1:
             out.append(PRONUN[slst[i]][0])
@@ -921,7 +924,7 @@ def SelectPhones(slst):
         else:
             for p in PRONUN[slst[i]]:
                 pr = ProbPhone(p, slst[i-1],slst[i],slst[i+1])
-#                print(slst[i],' pronounce ',p,pr)
+#                print(slst[i],' pronounce ',p,pr,prmax)
                 if pr > prmax:
                    prmax = pr
                    outp = p
@@ -944,9 +947,13 @@ def ProbPhone(p,pw,w,nw):
     global FrmSBigram
     global PhSUnigram
     global FrmSUnigram
+    global AbsUnigram
+    global AbsFrmSUnigram
+
     p3=0.
     p2=0.
     p1=0.
+    p0=0.
     if PhSTrigram[(pw,w,nw,p)] > 0.:
         p3 = (1. + math.log(PhSTrigram[(pw,w,nw,p)])) / (1. + math.log(FrmSTrigram[(pw,w,nw)]))
 #        print('Trigram',PhSTrigram[(pw,w,nw,p)])
@@ -959,9 +966,17 @@ def ProbPhone(p,pw,w,nw):
         p2 = p2 + (1. + math.log(PhSBigram[(w,nw,p)])) / (1. + math.log(FrmSBigram[(w,nw)])) * 0.75
     if PhSUnigram[(w,p)] > 0.:
         p1 = (1 + math.log(PhSUnigram[(w,p)])) / (1. + math.log(FrmSUnigram[w]))
-    prob =  0.8 * p3 + 0.16 * p2 + 0.03 * p1 + .00000000001
+
+### get abstract form of sounds
+    abs_w = re.sub(r"[่้๊๋]","",w)
+    abs_w = re.sub(r"[ก-ฮ]","C",abs_w)
+    abs_p = re.sub(r"[0-9]","",p)
+    abs_p = re.sub(r"[^aeio@OuxU]","C",abs_p)
+    if AbsUnigram[(abs_w,abs_p)] > 0.:
+        p0 = (1 + math.log(AbsUnigram[(abs_w,abs_p)])) / (1. + math.log(AbsFrmSUnigram[abs_w]))
+    prob =  0.8*p3 + 0.16*p2 + 0.03*p1 + 0.001*p0 + 0.00000000001
     return(prob)
-        
+
 def read_PhSTrigram(File):
     global PhSTrigram
     global FrmSTrigram
@@ -969,6 +984,8 @@ def read_PhSTrigram(File):
     global FrmSBigram
     global PhSUnigram
     global FrmSUnigram
+    global AbsUnigram
+    global AbsFrmSUnigram
     
     PhSTrigram = defaultdict(float)
     FrmSTrigram = defaultdict(float)
@@ -976,6 +993,8 @@ def read_PhSTrigram(File):
     FrmSBigram = defaultdict(float)
     PhSUnigram = defaultdict(float)
     FrmSUnigram = defaultdict(float)
+    AbsUnigram = defaultdict(float)
+    AbsFrmSUnigram = defaultdict(float)
     
     IFile = open(File,'r',encoding='cp874')
     for line in IFile.readlines():
@@ -993,7 +1012,15 @@ def read_PhSTrigram(File):
         FrmSBigram[(x2,x3)] += float(ct)
         PhSUnigram[(x2,p)] += float(ct)
         FrmSUnigram[x2] += float(ct)
+        abs_x2 = re.sub(r"[่้๊๋]","",x2)
+        abs_x2 = re.sub(r"[ก-ฮ]","C",abs_x2)
+        abs_p = re.sub(r"[0-9]","",p)
+        abs_p = re.sub(r"[^aeio@OuxU]","C",abs_p)
+#        print(x2,'=>',abs_x2,':',p,'=>',abs_p)
+        AbsUnigram[(abs_x2,abs_p)] += float(ct)
+        AbsFrmSUnigram[abs_x2] += float(ct)
     IFile.close()
+
     
 def th2ipa(txt):
     out = ''
@@ -1114,6 +1141,65 @@ def wordseg_colloc(Input):
             return("<Fail>"+Input+"</Fail>")
         
 
+###################################################################
+###### Thai word segmentation using word similarities of adjacent pairs
+###### Input is a list of syllables
+###### also add each syllable as a potential word
+def wordseg_w2v(Input,spellchk):
+    global TDICT
+    global EndOfSent
+    global chart
+    global SegSep
+    global WordSep
+    global CollocSt
+    
+    part = []
+    chart = defaultdict(dict)
+    SylSep = '~'
+    outx = ""
+
+    chart.clear()
+    CollocSt = defaultdict(float)
+
+    tltk.corpus.w2v_load()
+    
+    part = Input.split(SegSep)
+    for inx in part:
+        SylLst = syl_segment(inx).split('~')
+        if SylLst[-1] == '<s/>': SylLst.pop()
+#        SylLst = inx.split(SylSep)
+        EndOfSent = len(SylLst)
+        ######### Gen unknown word by set each syllable as a potential word
+        if spellchk == 'yes' : gen_unknown_thaiw(SylLst)
+        for i in range(EndOfSent):
+            chart[i][i+1] = [SylLst[i]]
+        eng_abbr(SylLst)    
+        ############################################################
+        for i in range(EndOfSent):
+            for j in range(i,EndOfSent+1):
+                wrd = ''.join(SylLst[i:j])
+                if wrd in TDICT:
+                    chart[i][j] = [wrd]
+                    if j > i+1:   ### more than one syllable, compute St
+                        St = 0.0
+                        Stlst = []
+                        NoOfSyl = len(SylLst[i:j])
+                        for ii in range(i,j-1):
+#                            St = tltk.corpus.similarity(SylLst[ii],SylLst[ii+1])
+                            Stlst.append(tltk.corpus.similarity(SylLst[ii],SylLst[ii+1]))
+#                            print (SylLst[ii],SylLst[ii+1],xx)
+                        St = sum(Stlst)/len(Stlst)     
+                        CollocSt[(i,j)] = St    #### Compute STrength of the word
+#                        print(i,j,wrd,CollocSt[(i,j)])
+                    else:   ### one sylable word St = 0
+                        CollocSt[(i,j)] = 0.0
+        if chart_parse():
+#            return(chart[0][EndOfSent])
+            outx += WordSep.join(chart[0][EndOfSent])
+            return(outx)
+        else:
+            return("<Fail>"+Input+"</Fail>")
+
 ####################################################################
 #### Word segmentation using Dictionary lookup 
 #### Input = Thai string,  method = syl | word  output = n-best segmentations
@@ -1204,7 +1290,7 @@ def chartparse_mm_bn():
 
 ####################################################################
 #### Word segmentation using Maximal Matching (minimal word) approach
-#### Input = Thai string,  method = colloc|ngram|mm , 
+#### Input = Thai string,  method = mm|colloc|ngram|w2v , 
 ####   spellchk=yes|no 
 ######################################################################
 def word_segment(Input,method='colloc',spellchk='no'):
@@ -1224,12 +1310,14 @@ def word_segment(Input,method='colloc',spellchk='no'):
             if objMatch:
                 out = inp
             else:
-                if method == 'mm':
+                if method == 'mm' or method == 'ngram':
                     out = wordseg_mm(inp,method,spellchk)
                 elif method == 'colloc':
                     out =wordseg_colloc(inp)
-                elif method == 'ngram':
-                    out =wordseg_mm(inp,method,spellchk)        
+                elif method == 'w2v':
+                    out =wordseg_w2v(inp,spellchk)
+#                elif method == 'ngram':
+#                    out =wordseg_mm(inp,method,spellchk)
             output = output+out+WordSep
 #        output = output.rstrip(WordSep)
         output = output+'<s/>'    ####write <s/> output for SegSep   
@@ -1305,6 +1393,7 @@ def chartparse_mm():
     else:
         return(0)
 
+
 ### use bigram prob to select the best sequnece
 def chartparse_ngram():
     global chart
@@ -1348,6 +1437,7 @@ def BigramProb(WLst):
             p += math.log(0.0001/1000000)    
 
     return(p)
+
 ##########################################
 # Compute Collocation Strength between w1,w2
 # stat = chi2 | mi | ll
@@ -1422,15 +1512,16 @@ def eng_abbr(SylLst):
     global EndOfSent
     global EngAbbr
     i=0
-    while i < EndOfSent:
+    while i < EndOfSent-1:
         if SylLst[i] in EngAbbr:
             j=i+1
-            while SylLst[j] in EngAbbr:
+            while j<EndOfSent and SylLst[j] in EngAbbr:
                 j=j+1
             if j>i+1:
                 chart[i][j] = [''.join(SylLst[i:j])]
-                print(SylLst[i:j],'=>EngAbbr')
+#                print(SylLst[i:j],'=>EngAbbr')
                 i=j+1
+            i=i+1    
         else:
             i=i+1
     return(1)
@@ -1929,8 +2020,12 @@ initial()
 #print(end - start)
 
 
+
 ################# testing area #######################################
+#print(g2p('ราคาค่าตัววันนี้ไอซ์แลนด์'))
 #print(word_segment_mm('นายกรัฐมนตรีกล่าวกับคนขับรถประจำทางหลวงสายสองว่า อยากวิงวอนให้ใช้ความรอบคอบอย่าหลงเชื่อคำชักจูงหรือปลุกระดมของพวกหัวรุนแรงจากทางการไฟฟ้า'))
+#print(g2p('นายกรัฐมนตรีกล่าวกับคนขับรถประจำทางหลวงสายสองว่า อยากวิงวอนให้ใช้ความรอบคอบอย่าหลงเชื่อคำชักจูงหรือปลุกระดมของพวกหัวรุนแรงจากทางการไฟฟ้า'))
+
 #print(word_segment('นายกรัฐมนตรีกล่าวกับคนขับรถประจำทางหลวงสายสองว่า อยากวิงวอนให้ใช้ความรอบคอบอย่าหลงเชื่อคำชักจูงหรือปลุกระดมของพวกหัวรุนแรงจากทางการไฟฟ้า'))
 
 #print(word_segment('นายกรัฐมนตรีกล่าวกับสำนักข่าวซีซีบีและเอ็นบีดีวายว่า'))
