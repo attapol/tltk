@@ -69,7 +69,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
      install_requires=[
-          'nltk', 'sklearn', 'sklearn_crfsuite', 'gensim'
+          'nltk', 'scikit-learn', 'sklearn_crfsuite', 'gensim'
       ],
 
     # List additional groups of dependencies here (e.g. development
